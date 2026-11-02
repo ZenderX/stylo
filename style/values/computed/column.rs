@@ -4,8 +4,11 @@
 
 //! Computed types for the column properties.
 
-use crate::values::computed::PositiveInteger;
-use crate::values::generics::column::GenericColumnCount;
+use crate::values::computed::{NonNegativeLength, NonNegativeLengthPercentage, PositiveInteger};
+use crate::values::generics::column::{GenericColumnCount, GenericColumnWidth};
 
 /// A computed type for `column-count` values.
 pub type ColumnCount = GenericColumnCount<PositiveInteger>;
+
+/// A computed type for `column-width` values.
+pub type ColumnWidth = GenericColumnWidth<NonNegativeLength, NonNegativeLengthPercentage>;

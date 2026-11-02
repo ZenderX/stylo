@@ -288,16 +288,9 @@ impl Parse for TrackList<LengthPercentage, Integer> {
     }
 }
 
-#[cfg(feature = "gecko")]
 #[inline]
 fn allow_grid_template_subgrids() -> bool {
     true
-}
-
-#[cfg(feature = "servo")]
-#[inline]
-fn allow_grid_template_subgrids() -> bool {
-    false
 }
 
 #[cfg(feature = "gecko")]

@@ -276,44 +276,12 @@ pub fn parse_counter_style_body<'i, 't>(
             }
         }
     }
-    let error = match *rule.resolved_system() {
-        ref system @ System::Cyclic
-        | ref system @ System::Fixed { .. }
-        | ref system @ System::Symbolic
-        | ref system @ System::Alphabetic
-        | ref system @ System::Numeric
-            if rule.descriptors.symbols.is_none() =>
-        {
-            let system = system.to_css_string();
-            Some(ContextualParseError::InvalidCounterStyleWithoutSymbols(
-                system,
-            ))
-        },
-        ref system @ System::Alphabetic | ref system @ System::Numeric
-            if rule.descriptors.symbols.as_ref().unwrap().0.len() < 2 =>
-        {
-            let system = system.to_css_string();
-            Some(ContextualParseError::InvalidCounterStyleNotEnoughSymbols(
-                system,
-            ))
-        },
-        System::Additive if rule.descriptors.additive_symbols.is_none() => {
-            Some(ContextualParseError::InvalidCounterStyleWithoutAdditiveSymbols)
-        },
-        System::Extends(_) if rule.descriptors.symbols.is_some() => {
-            Some(ContextualParseError::InvalidCounterStyleExtendsWithSymbols)
-        },
-        System::Extends(_) if rule.descriptors.additive_symbols.is_some() => {
-            Some(ContextualParseError::InvalidCounterStyleExtendsWithAdditiveSymbols)
-        },
-        _ => None,
-    };
-    if let Some(error) = error {
+    // css-counter-styles-3 §3.1-§3.2: a rule missing the symbols its system needs "does not
+    // define a counter style (but is still a parse-valid rule)", so CSSOM still exposes it.
+    if let Some(error) = rule.missing_symbols_error() {
         context.log_css_error(start, error);
-        Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
-    } else {
-        Ok(rule)
     }
+    Ok(rule)
 }
 
 impl ToCssWithGuard for CounterStyleRule {
@@ -431,6 +399,47 @@ impl CounterStyleRule {
         match self.descriptors.system {
             Some(ref system) => system,
             None => &System::Symbolic,
+        }
+    }
+
+    /// Whether the rule defines a counter style: its system has the `symbols` or
+    /// `additive-symbols` it needs, and an `extends` system has neither.
+    pub fn defines_counter_style(&self) -> bool {
+        self.missing_symbols_error().is_none()
+    }
+
+    fn missing_symbols_error(&self) -> Option<ContextualParseError<'static>> {
+        match *self.resolved_system() {
+            ref system @ System::Cyclic
+            | ref system @ System::Fixed { .. }
+            | ref system @ System::Symbolic
+            | ref system @ System::Alphabetic
+            | ref system @ System::Numeric
+                if self.descriptors.symbols.is_none() =>
+            {
+                let system = system.to_css_string();
+                Some(ContextualParseError::InvalidCounterStyleWithoutSymbols(
+                    system,
+                ))
+            },
+            ref system @ System::Alphabetic | ref system @ System::Numeric
+                if self.descriptors.symbols.as_ref().unwrap().0.len() < 2 =>
+            {
+                let system = system.to_css_string();
+                Some(ContextualParseError::InvalidCounterStyleNotEnoughSymbols(
+                    system,
+                ))
+            },
+            System::Additive if self.descriptors.additive_symbols.is_none() => {
+                Some(ContextualParseError::InvalidCounterStyleWithoutAdditiveSymbols)
+            },
+            System::Extends(_) if self.descriptors.symbols.is_some() => {
+                Some(ContextualParseError::InvalidCounterStyleExtendsWithSymbols)
+            },
+            System::Extends(_) if self.descriptors.additive_symbols.is_some() => {
+                Some(ContextualParseError::InvalidCounterStyleExtendsWithAdditiveSymbols)
+            },
+            _ => None,
         }
     }
 }

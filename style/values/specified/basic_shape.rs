@@ -187,14 +187,15 @@ bitflags! {
             Self::PATH.bits() |
             Self::SHAPE.bits();
 
-        /// For shape-outside.
+        /// For shape-outside (css-shapes-1 lists path() among its <basic-shape>s).
         const SHAPE_OUTSIDE =
             Self::INSET.bits() |
             Self::XYWH.bits() |
             Self::RECT.bits() |
             Self::CIRCLE.bits() |
             Self::ELLIPSE.bits() |
-            Self::POLYGON.bits();
+            Self::POLYGON.bits() |
+            Self::PATH.bits();
     }
 }
 

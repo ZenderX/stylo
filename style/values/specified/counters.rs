@@ -151,7 +151,7 @@ impl Content {
         input
             .try_parse(|input| {
                 input.expect_comma()?;
-                CounterStyle::parse(context, input, CounterStyleParsingFlags::empty())
+                CounterStyle::parse(context, input, CounterStyleParsingFlags::ALLOW_NONE)
             })
             .unwrap_or_else(|_| CounterStyle::decimal())
     }

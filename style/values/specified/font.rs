@@ -41,8 +41,9 @@ macro_rules! system_font_methods {
                 _context.cached_system_font.as_ref().unwrap().$field.clone()
             }
             #[cfg(feature = "servo")]
-            {
-                unreachable!()
+            match *self {
+                $ty::System(system) => system.host_font().$field,
+                _ => unreachable!(),
             }
         }
     };
@@ -100,23 +101,99 @@ pub enum SystemFont {
     End, // Just for indexing purposes.
 }
 
-// We don't parse system fonts in servo, but in the interest of not
-// littering a lot of code with `if engine == "gecko"` conditionals,
-// we have a dummy system font module that does nothing
-
+/// System fonts: the six CSS keywords, without gecko's internal ones.
 #[derive(
-    Clone, Copy, Debug, Eq, Hash, MallocSizeOf, PartialEq, SpecifiedValueInfo, ToCss, ToShmem,
+    Clone, Copy, Debug, Eq, Hash, MallocSizeOf, Parse, PartialEq, SpecifiedValueInfo, ToCss, ToShmem,
 )]
-#[allow(missing_docs)]
 #[cfg(feature = "servo")]
-/// void enum for system font, can never exist
-pub enum SystemFont {}
+pub enum SystemFont {
+    /// https://drafts.csswg.org/css-fonts/#valdef-font-caption
+    Caption,
+    /// https://drafts.csswg.org/css-fonts/#valdef-font-icon
+    Icon,
+    /// https://drafts.csswg.org/css-fonts/#valdef-font-menu
+    Menu,
+    /// https://drafts.csswg.org/css-fonts/#valdef-font-message-box
+    MessageBox,
+    /// https://drafts.csswg.org/css-fonts/#valdef-font-small-caption
+    SmallCaption,
+    /// https://drafts.csswg.org/css-fonts/#valdef-font-status-bar
+    StatusBar,
+}
 
-#[allow(missing_docs)]
+/// The computed font a system font keyword stands for, before text zoom.
+#[cfg(feature = "servo")]
+#[derive(Clone, Debug)]
+pub struct HostSystemFont {
+    /// The host UI font family.
+    pub font_family: computed::FontFamily,
+    /// The host UI font size; `keyword_info` is `none`.
+    pub font_size: computed::FontSize,
+    /// Always `normal`.
+    pub font_style: computed::FontStyle,
+    /// Always `normal`.
+    pub font_stretch: computed::FontStretch,
+    /// Always `normal`.
+    pub font_weight: computed::FontWeight,
+}
+
 #[cfg(feature = "servo")]
 impl SystemFont {
-    pub fn parse(_: &mut Parser) -> Result<Self, ()> {
-        Err(())
+    /// The host UI font for this keyword, as Chromium resolves it: on Apple
+    /// platforms `system-ui` at AppKit's system (13px), small system (11px)
+    /// and label (10px) sizes; elsewhere Windows' answer (headless Edge 156):
+    /// Arial at the 16px default for caption, icon and message-box, "Segoe UI"
+    /// at 12px for menu, small-caption and status-bar.
+    pub fn host_font(self) -> HostSystemFont {
+        #[cfg(target_vendor = "apple")]
+        let (family, size) = (
+            SingleFontFamily::Generic(computed::GenericFontFamily::SystemUi),
+            match self {
+                SystemFont::Caption
+                | SystemFont::Icon
+                | SystemFont::Menu
+                | SystemFont::MessageBox => 13.,
+                SystemFont::SmallCaption => 11.,
+                SystemFont::StatusBar => 10.,
+            },
+        );
+        #[cfg(not(target_vendor = "apple"))]
+        let (family, size) = {
+            use crate::values::computed::font::FontFamilyNameSyntax;
+            let (name, syntax, size) = match self {
+                SystemFont::Caption | SystemFont::Icon | SystemFont::MessageBox => {
+                    ("Arial", FontFamilyNameSyntax::Identifiers, FONT_MEDIUM_PX)
+                },
+                SystemFont::Menu | SystemFont::SmallCaption | SystemFont::StatusBar => {
+                    ("Segoe UI", FontFamilyNameSyntax::Quoted, 12.)
+                },
+            };
+            (
+                SingleFontFamily::FamilyName(FamilyName {
+                    name: Atom::from(name),
+                    syntax,
+                }),
+                size,
+            )
+        };
+        let size = NonNegative(CSSPixelLength::new(size));
+        HostSystemFont {
+            font_family: computed::FontFamily {
+                families: FontFamilyList {
+                    list: crate::ArcSlice::from_iter(std::iter::once(family)),
+                },
+                is_system_font: true,
+                is_initial: false,
+            },
+            font_size: computed::FontSize {
+                computed_size: size,
+                used_size: size,
+                keyword_info: KeywordInfo::none(),
+            },
+            font_style: computed::FontStyle::NORMAL,
+            font_stretch: computed::FontStretch::NORMAL,
+            font_weight: computed::FontWeight::NORMAL,
+        }
     }
 }
 
@@ -518,7 +595,6 @@ pub enum FontSizeKeyword {
     XXXLarge,
     /// Indicate whether to apply font-size: math is specified so that extra
     /// scaling due to math-depth changes is applied during the cascade.
-    #[cfg(feature = "gecko")]
     Math,
     #[css(skip)]
     None,
@@ -532,15 +608,8 @@ impl FontSizeKeyword {
     }
 
     /// Returns true if the font size is the math keyword
-    #[cfg(feature = "gecko")]
     pub fn is_math(self) -> bool {
         matches!(self, Self::Math)
-    }
-
-    /// Returns true if the font size is the math keyword
-    #[cfg(feature = "servo")]
-    pub fn is_math(self) -> bool {
-        false
     }
 }
 
@@ -604,7 +673,6 @@ impl KeywordInfo {
     /// text-zoom.
     fn to_computed_value(&self, context: &Context) -> CSSPixelLength {
         debug_assert_ne!(self.kw, FontSizeKeyword::None);
-        #[cfg(feature = "gecko")]
         debug_assert_ne!(self.kw, FontSizeKeyword::Math);
         let base = context.maybe_zoom_text(self.kw.to_length(context).0);
         let zoom_factor = context.style().effective_zoom.value();
@@ -843,7 +911,6 @@ impl FontSizeKeyword {
         quirks_mode: QuirksMode,
         base_size: Length,
     ) -> NonNegativeLength {
-        #[cfg(feature = "gecko")]
         debug_assert_ne!(*self, FontSizeKeyword::Math);
         // The tables in this function are originally from
         // nsRuleNode::CalcFontPointSize in Gecko:
@@ -992,10 +1059,12 @@ impl FontSize {
                         line_height_base,
                     )
                 },
-                FontSize::System(_) => {
+                FontSize::System(_system) => {
                     #[cfg(feature = "servo")]
                     {
-                        unreachable!()
+                        context
+                            .maybe_zoom_text(_system.host_font().font_size.computed_size())
+                            .zoom(context.builder.effective_zoom)
                     }
                     #[cfg(feature = "gecko")]
                     {
@@ -1634,10 +1703,12 @@ pub enum FontSynthesis {
     Clone,
     Copy,
     Debug,
+    Deserialize,
     Eq,
     MallocSizeOf,
     Parse,
     PartialEq,
+    Serialize,
     SpecifiedValueInfo,
     ToComputedValue,
     ToCss,
@@ -1657,9 +1728,11 @@ pub enum FontSynthesisStyle {
 #[derive(
     Clone,
     Debug,
+    Deserialize,
     Eq,
     MallocSizeOf,
     PartialEq,
+    Serialize,
     SpecifiedValueInfo,
     ToComputedValue,
     ToResolvedValue,
@@ -1682,6 +1755,10 @@ impl FontPalette {
     }
     pub fn dark() -> Self {
         Self(atom!("dark"))
+    }
+    /// The keyword or the `<dashed-ident>` of a `@font-palette-values` rule.
+    pub fn as_atom(&self) -> &Atom {
+        &self.0
     }
 }
 

@@ -16,7 +16,7 @@ use crate::properties::longhands::display::computed_value::T as Display;
 use crate::properties::{ComputedValues, PropertyFlags};
 use crate::selector_parser::AttrValue as SelectorAttrValue;
 use crate::selector_parser::{PseudoElementCascadeType, SelectorParser};
-use crate::values::{AtomIdent, AtomString};
+use crate::values::{serialize_atom_identifier, AtomIdent, AtomString, CustomIdent};
 use crate::{Atom, CaseSensitivityExt, LocalName, Namespace, Prefix};
 use cssparser::{
     match_ignore_ascii_case, serialize_identifier, CowRcStr, Parser as CssParser, SourceLocation,
@@ -28,16 +28,13 @@ use selectors::attr::{AttrSelectorOperation, CaseSensitivity, NamespaceConstrain
 use selectors::parser::SelectorParseErrorKind;
 use selectors::visitor::SelectorVisitor;
 use std::fmt;
-use std::mem;
 use std::ops::{Deref, DerefMut};
 use style_traits::{ParseError, StyleParseErrorKind};
 
 /// A pseudo-element, both public and private.
 ///
 /// NB: If you add to this list, be sure to update `each_simple_pseudo_element` too.
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize, ToShmem,
-)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize, ToShmem)]
 #[allow(missing_docs)]
 #[repr(usize)]
 pub enum PseudoElement {
@@ -45,20 +42,23 @@ pub enum PseudoElement {
     After = 0,
     Before,
     Selection,
-    // If/when :first-letter is added, update is_first_letter accordingly.
-
-    // If/when :first-line is added, update is_first_line accordingly.
-
-    // If/when ::first-letter or ::first-line are added, adjust our
-    // property_restriction implementation to do property filtering for them.
-    // Also, make sure the UA sheet has the !important rules some of the
+    // Make sure the UA sheet has the !important rules some of the
     // APPLIES_TO_PLACEHOLDER properties expect!
     FirstLetter,
+    FirstLine,
 
     // Non-eager pseudos.
     Backdrop,
     DetailsContent,
     Marker,
+
+    // The view transition tree (css-view-transitions-1 §3.2). Each named one carries its
+    // <pt-name-selector>: `*` in a selector, the view transition name in a built tree.
+    ViewTransition,
+    ViewTransitionGroup(Atom),
+    ViewTransitionImagePair(Atom),
+    ViewTransitionOld(Atom),
+    ViewTransitionNew(Atom),
 
     // Implemented pseudos. These pseudo elements are representing the
     // elements within an UA shadow DOM, and matching the elements with
@@ -84,7 +84,26 @@ pub enum PseudoElement {
 }
 
 /// The count of all pseudo-elements.
-pub const PSEUDO_COUNT: usize = PseudoElement::ServoTableWrapper as usize + 1;
+pub const PSEUDO_COUNT: usize = PseudoElement::ServoTableWrapper.index() + 1;
+
+/// Whether a <pt-name-selector> is the universal `*`, which no <custom-ident> can spell.
+fn is_universal_pt_name(name: &Atom) -> bool {
+    &**name == "*"
+}
+
+fn named_view_transition_to_css<W>(function: &str, name: &Atom, dest: &mut W) -> fmt::Result
+where
+    W: fmt::Write,
+{
+    dest.write_str(function)?;
+    // serialize_atom_identifier would escape `*` as `\*`.
+    if is_universal_pt_name(name) {
+        dest.write_char('*')?;
+    } else {
+        serialize_atom_identifier(name, dest)?;
+    }
+    dest.write_char(')')
+}
 
 impl ToCss for PseudoElement {
     fn to_css<W>(&self, dest: &mut W) -> fmt::Result
@@ -97,9 +116,23 @@ impl ToCss for PseudoElement {
             Before => "::before",
             Selection => "::selection",
             FirstLetter => "::first-letter",
+            FirstLine => "::first-line",
             Backdrop => "::backdrop",
             DetailsContent => "::details-content",
             Marker => "::marker",
+            ViewTransition => "::view-transition",
+            ViewTransitionGroup(ref name) => {
+                return named_view_transition_to_css("::view-transition-group(", name, dest)
+            },
+            ViewTransitionImagePair(ref name) => {
+                return named_view_transition_to_css("::view-transition-image-pair(", name, dest)
+            },
+            ViewTransitionOld(ref name) => {
+                return named_view_transition_to_css("::view-transition-old(", name, dest)
+            },
+            ViewTransitionNew(ref name) => {
+                return named_view_transition_to_css("::view-transition-new(", name, dest)
+            },
             ColorSwatch => "::color-swatch",
             FileSelectorButton => "::file-selector-button",
             Placeholder => "::placeholder",
@@ -124,23 +157,32 @@ impl ::selectors::parser::PseudoElement for PseudoElement {
     fn parses_as_element_backed(&self) -> bool {
         matches!(self, Self::DetailsContent)
     }
+
+    fn specificity_count(&self) -> u32 {
+        // css-view-transitions-1 §3.2.1: a named one counts as a type selector, `*` as nothing.
+        self.view_transition_name()
+            .map_or(1, |name| !is_universal_pt_name(name) as u32)
+    }
 }
 
 /// The number of eager pseudo-elements. Keep this in sync with cascade_type.
-pub const EAGER_PSEUDO_COUNT: usize = 4;
+pub const EAGER_PSEUDO_COUNT: usize = 5;
 
 impl PseudoElement {
     /// Gets the canonical index of this eagerly-cascaded pseudo-element.
     #[inline]
     pub fn eager_index(&self) -> usize {
         debug_assert!(self.is_eager());
-        self.clone() as usize
+        self.index()
     }
 
     /// An index for this pseudo-element to be indexed in an enumerated array.
+    /// Every name of a named view transition pseudo-element shares one index.
     #[inline]
-    pub fn index(&self) -> usize {
-        self.clone() as usize
+    pub const fn index(&self) -> usize {
+        // SAFETY: under `#[repr(usize)]` the enum is a `repr(C)` union of `repr(C)` structs
+        // that each start with the `usize` discriminant, so its first word is that discriminant.
+        unsafe { *(self as *const Self).cast::<usize>() }
     }
 
     /// An array of `None`, one per pseudo-element.
@@ -151,10 +193,43 @@ impl PseudoElement {
     /// Creates a pseudo-element from an eager index.
     #[inline]
     pub fn from_eager_index(i: usize) -> Self {
-        assert!(i < EAGER_PSEUDO_COUNT);
-        let result: PseudoElement = unsafe { mem::transmute(i) };
-        debug_assert!(result.is_eager());
+        let result = match i {
+            0 => PseudoElement::After,
+            1 => PseudoElement::Before,
+            2 => PseudoElement::Selection,
+            3 => PseudoElement::FirstLetter,
+            4 => PseudoElement::FirstLine,
+            _ => panic!("{i} is not an eager pseudo-element index"),
+        };
+        debug_assert!(result.is_eager() && result.eager_index() == i);
         result
+    }
+
+    /// The <pt-name-selector> of a named view transition pseudo-element.
+    pub fn view_transition_name(&self) -> Option<&Atom> {
+        match *self {
+            PseudoElement::ViewTransitionGroup(ref name)
+            | PseudoElement::ViewTransitionImagePair(ref name)
+            | PseudoElement::ViewTransitionOld(ref name)
+            | PseudoElement::ViewTransitionNew(ref name) => Some(name),
+            _ => None,
+        }
+    }
+
+    /// Whether this pseudo-element of a built view transition tree is the one `selector`
+    /// selects: the same type, with the same name or `*`
+    /// (css-view-transitions-1 §3.2.1). For a lazy style's `matching_fn`.
+    pub fn matches_view_transition_selector(&self, selector: &PseudoElement) -> bool {
+        use self::PseudoElement::*;
+        match (self, selector) {
+            (ViewTransitionGroup(name), ViewTransitionGroup(selected))
+            | (ViewTransitionImagePair(name), ViewTransitionImagePair(selected))
+            | (ViewTransitionOld(name), ViewTransitionOld(selected))
+            | (ViewTransitionNew(name), ViewTransitionNew(selected)) => {
+                is_universal_pt_name(selected) || name == selected
+            },
+            _ => self == selector,
+        }
     }
 
     /// Whether the current pseudo element is ::before or ::after.
@@ -202,7 +277,7 @@ impl PseudoElement {
     /// Whether the current pseudo element is :first-line
     #[inline]
     pub fn is_first_line(&self) -> bool {
-        false
+        *self == PseudoElement::FirstLine
     }
 
     /// Whether this pseudo-element is representing the color swatch
@@ -255,6 +330,7 @@ impl PseudoElement {
             PseudoElement::After
             | PseudoElement::Before
             | PseudoElement::FirstLetter
+            | PseudoElement::FirstLine
             | PseudoElement::Selection => PseudoElementCascadeType::Eager,
             PseudoElement::Backdrop
             | PseudoElement::ColorSwatch
@@ -265,6 +341,11 @@ impl PseudoElement {
             | PseudoElement::SliderFill
             | PseudoElement::SliderThumb
             | PseudoElement::SliderTrack
+            | PseudoElement::ViewTransition
+            | PseudoElement::ViewTransitionGroup(_)
+            | PseudoElement::ViewTransitionImagePair(_)
+            | PseudoElement::ViewTransitionOld(_)
+            | PseudoElement::ViewTransitionNew(_)
             | PseudoElement::ServoTextControlInnerContainer
             | PseudoElement::ServoTextControlInnerEditor => PseudoElementCascadeType::Lazy,
             PseudoElement::ServoAnonymousBox
@@ -292,6 +373,7 @@ impl PseudoElement {
     pub fn property_restriction(&self) -> Option<PropertyFlags> {
         Some(match self {
             PseudoElement::FirstLetter => PropertyFlags::APPLIES_TO_FIRST_LETTER,
+            PseudoElement::FirstLine => PropertyFlags::APPLIES_TO_FIRST_LINE,
             PseudoElement::Marker if static_prefs::pref!("layout.css.marker.restricted") => {
                 PropertyFlags::APPLIES_TO_MARKER
             },
@@ -698,6 +780,8 @@ impl<'a, 'i> ::selectors::Parser<'i> for SelectorParser<'a> {
             "selection" => Selection,
             "file-selector-button" => FileSelectorButton,
             "first-letter" => FirstLetter,
+            "first-line" => FirstLine,
+            "view-transition" => ViewTransition,
             "marker" => Marker,
             "details-content" => DetailsContent,
             "color-swatch" => ColorSwatch,
@@ -758,6 +842,30 @@ impl<'a, 'i> ::selectors::Parser<'i> for SelectorParser<'a> {
         };
 
         Ok(pseudo_element)
+    }
+
+    fn parse_functional_pseudo_element<'t>(
+        &self,
+        name: CowRcStr<'i>,
+        arguments: &mut CssParser<'i, 't>,
+    ) -> Result<PseudoElement, ParseError<'i>> {
+        use self::PseudoElement::*;
+        let pseudo_element: fn(Atom) -> PseudoElement = match_ignore_ascii_case! { &name,
+            "view-transition-group" => ViewTransitionGroup,
+            "view-transition-image-pair" => ViewTransitionImagePair,
+            "view-transition-old" => ViewTransitionOld,
+            "view-transition-new" => ViewTransitionNew,
+            _ => return Err(arguments.new_custom_error(
+                SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone())
+            )),
+        };
+        // <pt-name-selector> = '*' | <custom-ident> (css-view-transitions-1 §3.2.1)
+        let pt_name = if arguments.try_parse(|input| input.expect_delim('*')).is_ok() {
+            Atom::from("*")
+        } else {
+            CustomIdent::parse(arguments, &[])?.0
+        };
+        Ok(pseudo_element(pt_name))
     }
 
     fn default_namespace(&self) -> Option<Namespace> {

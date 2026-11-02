@@ -488,7 +488,6 @@ impl TextTransform {
     Parse,
     PartialEq,
     SpecifiedValueInfo,
-    ToComputedValue,
     ToCss,
     ToResolvedValue,
     ToShmem,
@@ -504,6 +503,35 @@ pub enum TextAlignLast {
     Right,
     Center,
     Justify,
+    /// Never a computed value: it computes to the parent's value, with `start` and `end`
+    /// resolved against the parent's direction (https://drafts.csswg.org/css-text/#valdef-text-align-match-parent).
+    MatchParent,
+}
+
+impl ToComputedValue for TextAlignLast {
+    type ComputedValue = Self;
+
+    #[inline]
+    fn to_computed_value(&self, context: &Context) -> Self {
+        if *self != TextAlignLast::MatchParent {
+            return *self;
+        }
+        let parent = context
+            .builder
+            .get_parent_inherited_text()
+            .clone_text_align_last();
+        let ltr = context.builder.inherited_writing_mode().is_bidi_ltr();
+        match (parent, ltr) {
+            (TextAlignLast::Start, true) | (TextAlignLast::End, false) => TextAlignLast::Left,
+            (TextAlignLast::Start, false) | (TextAlignLast::End, true) => TextAlignLast::Right,
+            _ => parent,
+        }
+    }
+
+    #[inline]
+    fn from_computed_value(computed: &Self) -> Self {
+        *computed
+    }
 }
 
 /// Specified value of text-align keyword value.
@@ -533,6 +561,9 @@ pub enum TextAlignKeyword {
     Center,
     Justify,
     End,
+    /// `text-align-all: justify` and `text-align-last: justify` together
+    /// (https://drafts.csswg.org/css-text/#valdef-text-align-justify-all).
+    JustifyAll,
     #[parse(aliases = "-webkit-center")]
     MozCenter,
     #[parse(aliases = "-webkit-left")]
@@ -1029,11 +1060,6 @@ impl Parse for TextIndent {
                     length = Some(len);
                     continue;
                 }
-            }
-
-            // Servo doesn't support the keywords, so just break and let the caller deal with it.
-            if cfg!(feature = "servo") {
-                break;
             }
 
             // Check for the keywords (boolean flags).

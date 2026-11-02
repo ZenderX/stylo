@@ -6,6 +6,7 @@
 //!
 //! [font-palette-values]: https://drafts.csswg.org/css-fonts/#font-palette-values
 
+use crate::color::AbsoluteColor;
 use crate::derives::*;
 use crate::error_reporting::ContextualParseError;
 #[cfg(feature = "gecko")]
@@ -62,6 +63,24 @@ impl Parse for FontPaletteOverrideColor {
             return Ok(FontPaletteOverrideColor { index, color });
         }
         Err(location.new_custom_error(StyleParseErrorKind::UnspecifiedError))
+    }
+}
+
+impl FontPaletteOverrideColor {
+    /// The palette entry the color replaces.
+    pub fn index(&self) -> u32 {
+        // Parsing rejected an index that does not resolve.
+        self.index.0.resolve().unwrap() as u32
+    }
+
+    /// The absolute color the entry takes.
+    pub fn absolute_color(&self) -> AbsoluteColor {
+        // Parsing accepted only colors that resolve to absolute ones without context.
+        self.color
+            .to_computed_color(None)
+            .ok()
+            .and_then(|c| c.as_absolute().copied())
+            .unwrap()
     }
 }
 

@@ -70,6 +70,26 @@ fn eval_prefers_color_scheme(context: &Context, query_value: Option<PrefersColor
     }
 }
 
+#[derive(Clone, Copy, Debug, FromPrimitive, Parse, ToCss)]
+#[repr(u8)]
+enum PrefersReducedMotion {
+    NoPreference,
+    Reduce,
+}
+
+/// https://drafts.csswg.org/mediaqueries-5/#prefers-reduced-motion
+fn eval_prefers_reduced_motion(
+    context: &Context,
+    query_value: Option<PrefersReducedMotion>,
+) -> bool {
+    let prefers_reduced = context.device().prefers_reduced_motion();
+    match query_value {
+        Some(PrefersReducedMotion::NoPreference) => !prefers_reduced,
+        Some(PrefersReducedMotion::Reduce) => prefers_reduced,
+        None => prefers_reduced,
+    }
+}
+
 bitflags! {
     /// https://drafts.csswg.org/mediaqueries-4/#mf-interaction
     #[derive(Debug, Clone, Copy)]
@@ -160,7 +180,7 @@ fn eval_aspect_ratio(context: &Context) -> Ratio {
 }
 
 /// A list with all the media features that Servo supports.
-pub static MEDIA_FEATURES: [QueryFeatureDescription; 15] = [
+pub static MEDIA_FEATURES: [QueryFeatureDescription; 16] = [
     feature!(
         atom!("width"),
         AllowsRanges::Yes,
@@ -249,6 +269,12 @@ pub static MEDIA_FEATURES: [QueryFeatureDescription; 15] = [
         atom!("prefers-color-scheme"),
         AllowsRanges::No,
         keyword_evaluator!(eval_prefers_color_scheme, PrefersColorScheme),
+        FeatureFlags::empty(),
+    ),
+    feature!(
+        atom!("prefers-reduced-motion"),
+        AllowsRanges::No,
+        keyword_evaluator!(eval_prefers_reduced_motion, PrefersReducedMotion),
         FeatureFlags::empty(),
     ),
 ];
