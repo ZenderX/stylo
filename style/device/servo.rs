@@ -69,6 +69,8 @@ pub(super) struct ExtraDeviceData {
     /// Whether the user prefers light mode or dark mode
     #[ignore_malloc_size_of = "Pure stack type"]
     prefers_color_scheme: PrefersColorScheme,
+    /// Whether the user prefers reduced motion
+    prefers_reduced_motion: bool,
     /// The capabilities of the primary pointer input
     #[ignore_malloc_size_of = "Pure stack type"]
     primary_pointer_capabilities: PointerCapabilities,
@@ -119,6 +121,7 @@ impl Device {
                 device_pixel_ratio,
                 quirks_mode,
                 prefers_color_scheme,
+                prefers_reduced_motion: false,
                 primary_pointer_capabilities,
                 all_pointer_capabilities,
                 font_metrics_provider,
@@ -303,6 +306,20 @@ impl Device {
     /// Returns the color scheme of this [`Device`].
     pub fn color_scheme(&self) -> PrefersColorScheme {
         self.extra.prefers_color_scheme
+    }
+
+    /// Set whether the user prefers reduced motion on this [`Device`].
+    ///
+    /// Note that this does not update any associated `Stylist`. For this you must call
+    /// `Stylist::media_features_change_changed_style` and
+    /// `Stylist::force_stylesheet_origins_dirty`.
+    pub fn set_prefers_reduced_motion(&mut self, prefers_reduced_motion: bool) {
+        self.extra.prefers_reduced_motion = prefers_reduced_motion;
+    }
+
+    /// Returns whether the user prefers reduced motion on this [`Device`].
+    pub fn prefers_reduced_motion(&self) -> bool {
+        self.extra.prefers_reduced_motion
     }
 
     /// Set the [`PointerCapbabilities`] value for the primary pointer on this [`Device`]

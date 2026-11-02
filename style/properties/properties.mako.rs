@@ -1643,7 +1643,7 @@ impl ComputedValues {
     /// Returns the pseudo-element that this style represents.
     #[cfg(feature = "servo")]
     pub fn pseudo(&self) -> Option<PseudoElement> {
-        self.pseudo
+        self.pseudo.clone()
     }
 
     /// Returns true if this is the style for a pseudo-element.
@@ -2836,8 +2836,9 @@ macro_rules! longhand_properties_idents {
 // Large pages generate tens of thousands of ComputedValues.
 #[cfg(feature = "gecko")]
 size_of_test!(ComputedValues, 248);
+// A named view transition pseudo-element's `Atom` makes servo's `pseudo` field 16 bytes.
 #[cfg(feature = "servo")]
-size_of_test!(ComputedValues, 232);
+size_of_test!(ComputedValues, 240);
 
 // FFI relies on this.
 size_of_test!(Option<Arc<ComputedValues>>, 8);

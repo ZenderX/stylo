@@ -108,9 +108,8 @@ impl fmt::Debug for EagerPseudoArray {
     }
 }
 
-// Can't use [None; EAGER_PSEUDO_COUNT] here because it complains
-// about Copy not being implemented for our Arc type.
-const EMPTY_PSEUDO_ARRAY: &'static EagerPseudoArrayInner = &[None, None, None, None];
+// An inline const block repeats `None` without needing our Arc type to be Copy.
+const EMPTY_PSEUDO_ARRAY: &'static EagerPseudoArrayInner = &[const { None }; EAGER_PSEUDO_COUNT];
 
 impl EagerPseudoStyles {
     /// Returns whether there are any pseudo styles.

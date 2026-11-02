@@ -2403,7 +2403,12 @@ impl ExtraStyleData {
         rule: &Arc<Locked<CounterStyleRule>>,
         layer: LayerId,
     ) -> Result<(), AllocErr> {
-        let name = rule.read_with(guard).name().0.clone();
+        let counter_style = rule.read_with(guard);
+        // A rule that defines no counter style must not hide one that does.
+        if !counter_style.defines_counter_style() {
+            return Ok(());
+        }
+        let name = counter_style.name().0.clone();
         self.counter_styles.try_insert(name, rule.clone(), layer)
     }
 

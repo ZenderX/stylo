@@ -35,4 +35,7 @@ use crate::derives::*;
 pub enum CaptionSide {
     Top,
     Bottom,
+    /// https://drafts.csswg.org/css-logical/#caption-side
+    InlineStart,
+    InlineEnd,
 }

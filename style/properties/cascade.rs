@@ -15,7 +15,6 @@ use crate::custom_properties::{
     ReferenceFlags, References, SingleNonCustomReference, SubstitutionFunctionKind, VariableValue,
 };
 use crate::dom::{AttributeTracker, DummyElementContext, ElementContext, TElement};
-#[cfg(feature = "gecko")]
 use crate::font_metrics::FontMetricsOrientation;
 use crate::properties::{
     property_counts, CSSWideKeyword, ComputedValues, DeclarationImportanceIterator, LonghandId,
@@ -37,7 +36,6 @@ use crate::stylesheets::layer_rule::LayerOrder;
 use crate::stylesheets::UrlExtraData;
 use crate::stylist::Stylist;
 use crate::values::computed::ToComputedValue;
-#[cfg(feature = "gecko")]
 use crate::values::specified::length::FontBaseSize;
 use crate::values::specified::position::PositionTryFallbacksTryTactic;
 use crate::values::{computed, specified};
@@ -498,12 +496,14 @@ fn tweak_when_ignoring_colors(
         return;
     }
 
-    // Always honor colors if forced-color-adjust is set to none.
+    // Always honor colors if forced-color-adjust is set to none. An inherited
+    // color is never forced here, so preserve-parent-color only differs from
+    // none there, and that inheritance needs no tweak.
     let forced = context
         .builder
         .get_inherited_text()
         .clone_forced_color_adjust();
-    if forced == computed::ForcedColorAdjust::None {
+    if forced != computed::ForcedColorAdjust::Auto {
         return;
     }
 
@@ -980,7 +980,6 @@ impl<'a> Cascade<'a> {
             },
             FontSize => {
                 if self.seen.longhands.contains(LonghandId::MathDepth) {
-                    #[cfg(feature = "gecko")]
                     Self::recompute_math_font_size_if_needed(context);
                 }
                 if self.seen.longhands.contains(LonghandId::XLang)
@@ -1491,7 +1490,6 @@ impl<'a> Cascade<'a> {
     /// https://w3c.github.io/mathml-core/#the-math-script-level-property
     /// TODO: Bug: 1548471: MathML Core also does not specify a script min size
     /// should we unship that feature or standardize it?
-    #[cfg(feature = "gecko")]
     fn recompute_math_font_size_if_needed(context: &mut computed::Context) {
         use crate::values::generics::NonNegative;
 
@@ -1553,6 +1551,39 @@ impl<'a> Cascade<'a> {
             }
         }
 
+        // Servo has no script minimum size, so the parent's size scales as is.
+        #[cfg(feature = "servo")]
+        {
+            use crate::values::specified::font::QueryFontMetricsFlags;
+
+            let builder = &context.builder;
+            let math_depth = builder.get_font().clone_math_depth();
+            let parent_font = builder.get_parent_font();
+            let parent_math_depth = parent_font.clone_math_depth();
+            if math_depth == parent_math_depth {
+                return;
+            }
+            let parent_size = parent_font.clone_font_size();
+
+            let font_metrics = context.query_font_metrics(
+                FontBaseSize::InheritedStyle,
+                FontMetricsOrientation::Horizontal,
+                QueryFontMetricsFlags::NEEDS_MATH_SCALES,
+            );
+            let scale = scale_factor_for_math_depth_change(
+                parent_math_depth as i32,
+                math_depth as i32,
+                font_metrics.script_percent_scale_down,
+                font_metrics.script_script_percent_scale_down,
+            );
+
+            let mut size = context.builder.get_font().clone_font_size();
+            size.computed_size = NonNegative(parent_size.computed_size().scale_by(scale));
+            size.used_size = NonNegative(parent_size.used_size().scale_by(scale));
+            context.builder.mutate_font().set_font_size(size);
+        }
+
+        #[cfg(feature = "gecko")]
         let (new_size, new_unconstrained_size) = {
             use crate::values::specified::font::QueryFontMetricsFlags;
 
@@ -1614,10 +1645,13 @@ impl<'a> Cascade<'a> {
                 )
             }
         };
-        let font = context.builder.mutate_font();
-        font.mFont.size = NonNegative(new_size);
-        font.mSize = NonNegative(new_size);
-        font.mScriptUnconstrainedSize = NonNegative(new_unconstrained_size);
+        #[cfg(feature = "gecko")]
+        {
+            let font = context.builder.mutate_font();
+            font.mFont.size = NonNegative(new_size);
+            font.mSize = NonNegative(new_size);
+            font.mScriptUnconstrainedSize = NonNegative(new_unconstrained_size);
+        }
     }
 
     /// Seeds `context.builder.substitution_functions` with the inherited custom properties and the

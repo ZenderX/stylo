@@ -3,6 +3,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 <%! from data import to_rust_ident, to_camel_case, SYSTEM_FONT_LONGHANDS %>
+## The four-sides shorthands css-logical-1 gives the `logical` keyword.
+<%! LOGICAL_KEYWORD_SHORTHANDS = ["margin", "padding", "border-color", "border-style", "border-width"] %>
 
 <%def name="longhand(property)">
 /// ${property.spec}
@@ -653,6 +655,11 @@ pub mod ${property.ident} {
             % if not shorthand.kind:
             use crate::properties::shorthands::${shorthand.ident}::parse_value;
             % endif
+            % if shorthand.name in LOGICAL_KEYWORD_SHORTHANDS:
+            if input.try_parse(|input| input.expect_ident_matching("logical")).is_ok() {
+                return parse_logical_into(declarations, context, input);
+            }
+            % endif
             input.parse_entirely(|input| parse_value(context, input)).map(|longhands| {
                 % for sub_property in shorthand.sub_properties:
                 % if sub_property.may_be_disabled_in(shorthand, engine):
@@ -742,6 +749,42 @@ pub mod ${property.ident} {
         % endfor
         })
     }
+
+    % if shorthand.name in LOGICAL_KEYWORD_SHORTHANDS:
+    <%
+        logical_sides = [
+            to_camel_case(shorthand.sub_properties[index].name.replace(physical, logical))
+            for index, (physical, logical) in enumerate([
+                ("top", "block-start"),
+                ("right", "inline-end"),
+                ("bottom", "block-end"),
+                ("left", "inline-start"),
+            ])
+        ]
+    %>
+    /// Parses the values after the `logical` keyword into the flow-relative longhands,
+    /// which take the four values in the physical order's places
+    /// (https://drafts.csswg.org/css-logical/#logical-shorthand-keyword).
+    fn parse_logical_into<'i, 't>(
+        declarations: &mut SourcePropertyDeclaration,
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<(), ParseError<'i>> {
+        use crate::properties::{LonghandId, NonCustomPropertyId};
+        % for side in logical_sides:
+        if !NonCustomPropertyId::from(LonghandId::${side}).allowed_in(context) {
+            return Err(input.new_custom_error(style_traits::StyleParseErrorKind::UnspecifiedError));
+        }
+        % endfor
+        let rect = input.parse_entirely(|input| {
+            Rect::parse_with(context, input, |c, i| <Single as crate::parser::Parse>::parse(c, i))
+        })?;
+        % for index, side in enumerate(logical_sides):
+        declarations.push(PropertyDeclaration::${side}(rect.${index}));
+        % endfor
+        Ok(())
+    }
+    % endif
 
     impl<'a> ToCss for LonghandsToSerialize<'a> {
         fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
